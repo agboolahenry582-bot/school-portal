@@ -118,17 +118,17 @@ def dashboard():
         return redirect("/")
     html=f"""
     <div class='card'>
-    <p>Welcome <b>{session['user']}</b> | <a href='/records' class='link'>View All Records →</a></p>
+    <p>Welcome <b>{session['user']}</b> ({session['role']}) | <a href='/records' class='link'>View All Records →</a></p>
     <h3>Add New Student Record</h3>
     <form method='post' action='/add'>
-    <input name='name' placeholder='Student Full Name e.g Agboola Henry' required>
-    <input name='class_name' placeholder='Class e.g JSS2'>
+    <input name='name' placeholder='Student Full Name' required>
+    <input name='class_name' placeholder='Class'>
     <textarea name='notebook_list' placeholder='Note Books List'></textarea>
     <textarea name='textbook_list' placeholder='Text Books List'></textarea>
-    <input name='books_total' type='number' step='0.01' placeholder='Books Total Price'>
-    <input name='books_paid' type='number' step='0.01' placeholder='Books Amount Paid'>
-    <input name='fees_total' type='number' step='0.01' placeholder='School Fees Total'>
-    <input name='fees_paid' type='number' step='0.01' placeholder='School Fees Paid'>
+    <input name='books_total' type='number' step='0.01' placeholder='Books Total'>
+    <input name='books_paid' type='number' step='0.01' placeholder='Books Paid'>
+    <input name='fees_total' type='number' step='0.01' placeholder='Fees Total'>
+    <input name='fees_paid' type='number' step='0.01' placeholder='Fees Paid'>
     <button class='btn'>SAVE RECORD</button>
     </form>
     </div>
@@ -154,16 +154,22 @@ def records():
     <div class='card'>
     <h3>Student Records - Separate Area</h3>
     <form method='get' action='/records'>
-    <input name='q' value='{q}' placeholder='Search by name e.g Agboola...'>
+    <input name='q' value='{q}' placeholder='Search by name...'>
     <button class='btn' style='background:#00a86b'>SEARCH</button>
     </form>
-    <p>Total: <b>{len(students)}</b> record(s) {"for search '"+q+"'" if q else ""}</p>
-    <a href='/records' class='link'>Show All</a> | <a href='/dashboard' class='link'>Back to Add Form</a>
+    <p>Total: <b>{len(students)}</b> record(s)</p>
     </div>
     """
     for s in students:
         bt=float(s['books_total'] or 0); bp=float(s['books_paid'] or 0)
         ft=float(s['fees_total'] or 0); fp=float(s['fees_paid'] or 0)
+        # ONLY ADMIN CAN SEE DELETE BUTTON
+        delete_btn = ""
+        if session.get("role") == "admin":
+            delete_btn = f"<a href='/delete/{s['id']}' onclick=\"return confirm('Delete {s['name']}?')\"><button class='btn' style='background:#d33;margin-top:5px'>DELETE</button></a>"
+        else:
+            delete_btn = "<p style='font-size:11px;color:gray'>Only admin can delete</p>"
+        
         html+=f"""
         <div class='card' style='border-left:5px solid #0b4fbf'>
         <b>{s['name']}</b> - {s['class_name']}<br>
@@ -171,7 +177,7 @@ def records():
         Books: Paid &#8358;{bp} Balance &#8358;{bt-bp}<br>
         Fees: Paid &#8358;{fp} Balance &#8358;{ft-fp}<br><br>
         <a href='/receipt/{s['id']}'><button class='btn'>PRINT RECEIPT</button></a>
-        <a href='/delete/{s['id']}' onclick="return confirm('Delete?')"><button class='btn' style='background:#d33;margin-top:5px'>DELETE</button></a>
+        {delete_btn}
         </div>
         """
     return render_template_string(BASE, content=html)
@@ -194,6 +200,8 @@ def add():
 def delete(id):
     if "user" not in session:
         return redirect("/")
+    if session.get("role") != "admin":
+        return render_template_string(BASE, content="<div class='card'><p style='color:red'>Only ADMIN can delete! Ask your boss.</p><a href='/records' class='link'>Back</a></div>")
     con=sqlite3.connect(DB_PATH)
     con.execute("DELETE FROM students WHERE id=?", (id,))
     con.commit()
