@@ -1,107 +1,188 @@
-
-from flask import Flask, render_template_string, request, redirect, session
-import sqlite3
+from flask import Flask, request, redirect, session, render_template_string, g
+import sqlite3, os
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'blue-cs-secret-2026'
+app.secret_key = "c&s_success_blue_2026"
+DB = "school.db"
 
-# DB setup
+# --- DATABASE ---
 def get_db():
-    conn = sqlite3.connect('school.db', check_same_thread=False)
-    return conn
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DB)
+        db.row_factory = sqlite3.Row
+    return db
 
-conn = get_db()
-c = conn.cursor()
-c.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT, role TEXT, password TEXT, dept TEXT)")
-c.execute("CREATE TABLE IF NOT EXISTS results (id INTEGER PRIMARY KEY, student_id TEXT, course TEXT, score INTEGER, grade TEXT)")
-c.execute("CREATE TABLE IF NOT EXISTS fees (id INTEGER PRIMARY KEY, student_id TEXT, amount REAL, status TEXT, date TEXT)")
-conn.commit()
+def init_db():
+    with sqlite3.connect(DB) as con:
+        con.execute('''CREATE TABLE IF NOT EXISTS users 
+        (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password TEXT, role TEXT)''')
+        con.execute('''CREATE TABLE IF NOT EXISTS students
+        (id INTEGER PRIMARY KEY, name TEXT, class_name TEXT, 
+         notebook_list TEXT, textbook_list TEXT,
+         books_total REAL, books_paid REAL,
+         fees_total REAL, fees_paid REAL,
+         created_by TEXT, date TEXT)''')
+        # Default users - change password after first login
+        try:
+            con.execute("INSERT INTO users (username,password,role) VALUES ('admin','admin123','admin')")
+            con.execute("INSERT INTO users (username,password,role) VALUES ('staff1','staff123','staff')")
+            con.execute("INSERT INTO users (username,password,role) VALUES ('staff2','staff123','staff')")
+            con.commit()
+        except: pass
 
-c.execute("SELECT COUNT(*) FROM users")
-if c.fetchone()[0] == 0:
-    c.execute("INSERT INTO users VALUES ('ADMIN001', 'Admin User', 'Admin', 'admin123', 'ICT')")
-    c.execute("INSERT INTO users VALUES ('STU001', 'Adeola Bello', 'Student', '1234', 'Computer Science')")
-    c.execute("INSERT INTO users VALUES ('LEC001', 'Dr. Okafor', 'Lecturer', '1234', 'Computer Science')")
-    conn.commit()
+init_db()
 
-# BLUE C&S TEMPLATE
-HTML = """
+# --- HTML TEMPLATE (BLUE THEME) ---
+BASE_HTML = """
 <!DOCTYPE html>
 <html>
 <head>
-<title>C&S School Portal</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<title>C&S Success Class Private School</title>
 <style>
-body { margin:0; font-family: Arial; background:#eef5ff; }
-.header { background: linear-gradient(90deg, #0033a0, #0066ff); color:white; padding:20px; text-align:center; }
-.header h1 { margin:0; font-size:28px; }
-.header p { margin:5px; opacity:0.9; }
-.card { background:white; max-width:500px; margin:30px auto; padding:25px; border-radius:12px; box-shadow:0 4px 15px rgba(0,51,160,0.15); border-top:5px solid #0066ff; }
-input { width:100%; padding:12px; margin:10px 0; border:2px solid #cddfff; border-radius:8px; }
-button { width:100%; padding:12px; background:#0033a0; color:white; border:none; border-radius:8px; font-size:16px; font-weight:bold; cursor:pointer; }
-button:hover { background:#0066ff; }
-.info { background:#dbe8ff; padding:10px; border-radius:8px; margin-top:15px; font-size:14px; }
-.badge { background:#0033a0; color:white; padding:4px 10px; border-radius:20px; font-size:12px; }
+body{font-family:Arial; background:#eef4ff; margin:0; padding:0; color:#1a2a4a}
+.header{background:#0b4fbf; color:white; padding:18px; text-align:center; font-weight:bold; font-size:22px}
+.card{background:white; margin:15px; padding:15px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+input,select,textarea{width:100%; padding:10px; margin:6px 0; border-radius:8px; border:1px solid #b8cfff}
+.btn{background:#0b4fbf; color:white; border:none; padding:12px; border-radius:8px; width:100%; font-weight:bold; cursor:pointer}
+.btn:active{transform:scale(0.98)}
+.small{font-size:12px; color:gray}
+.badge{padding:4px 8px; border-radius:6px; color:white}
+.bal{color:red; font-weight:bold} .paid{color:green; font-weight:bold}
+.receipt{border:2px dashed #0b4fbf; padding:15px}
+@media print{.no-print{display:none}}
 </style>
 </head>
 <body>
-<div class="header">
-<h1>🔵 C&S SCHOOL PORTAL</h1>
-<p>Cherubim & Seraphim College - Blue Portal</p>
-</div>
-<div class="card">
-{{content}}
-</div>
+<div class="header">C&S SUCCESS CLASS PRIVATE SCHOOL</div>
+{{content|safe}}
 </body>
 </html>
 """
 
-@app.route('/', methods=['GET','POST'])
+LOGIN_PAGE = """
+<div class="card">
+<h3>Staff Login</h3>
+<form method="post">
+<input name="username" placeholder="Username - admin / staff1 / staff2" required>
+<input name="password" type="password" placeholder="Password" required>
+<button class="btn">LOGIN</button>
+</form>
+<p class="small">Default: admin/admin123, staff1/staff123, staff2/staff123</p>
+</div>
+"""
+
+DASHBOARD = """
+<div class="card no-print">
+<p>Welcome <b>{{user}}</b> ({{role}}) <a href="/logout" style="float:right">Logout</a></p>
+<form method="post" action="/add">
+<input name="name" placeholder="Student Full Name" required>
+<input name="class_name" placeholder="Class (e.g JSS1)">
+<textarea name="notebook_list" placeholder="List of Note Books e.g 10pcs 60leaves"></textarea>
+<textarea name="textbook_list" placeholder="List of Text Books e.g English, Maths"></textarea>
+<input name="books_total" type="number" step="0.01" placeholder="Books Total Price" required>
+<input name="books_paid" type="number" step="0.01" placeholder="Books Amount Paid" required>
+<input name="fees_total" type="number" step="0.01" placeholder="School Fees Total" required>
+<input name="fees_paid" type="number" step="0.01" placeholder="School Fees Paid" required>
+<button class="btn">SAVE STUDENT RECORD</button>
+</form>
+</div>
+<div class="card">
+<h3>All Records</h3>
+{% for s in students %}
+<div class="card" style="border-left:5px solid #0b4fbf">
+<b>{{s['name']}}</b> - {{s['class_name']}}<br>
+<small>Note Books: {{s['notebook_list']}}<br>Text Books: {{s['textbook_list']}}</small><br><br>
+Books: <span class="paid">Paid ₦{{s['books_paid']}}</span> | 
+<span class="bal">Remains ₦{{s['books_total']-s['books_paid']}}</span><br>
+Fees: <span class="paid">Paid ₦{{s['fees_paid']}}</span> | 
+<span class="bal">Remains ₦{{s['fees_total']-s['fees_paid']}}</span><br><br>
+<a href="/receipt/{{s['id']}}"><button class="btn">PRINT RECEIPT</button></a>
+</div>
+{% endfor %}
+</div>
+"""
+
+RECEIPT = """
+<div class="card receipt" id="receipt">
+<center><h2 style="color:#0b4fbf">C&S SUCCESS CLASS PRIVATE SCHOOL</h2>
+<p>Payment Receipt</p>
+<p>{{date}}</p></center>
+<hr>
+<p><b>Student:</b> {{s['name']}} ({{s['class_name']}})</p>
+<p><b>Note Books:</b> {{s['notebook_list']}}</p>
+<p><b>Text Books:</b> {{s['textbook_list']}}</p>
+<hr>
+<p>Books Total: ₦{{s['books_total']}}<br>
+Books Paid: ₦{{s['books_paid']}}<br>
+<b>Books Balance: ₦{{s['books_total']-s['books_paid']}}</b></p>
+<hr>
+<p>Fees Total: ₦{{s['fees_total']}}<br>
+Fees Paid: ₦{{s['fees_paid']}}<br>
+<b>Fees Balance: ₦{{s['fees_total']-s['fees_paid']}}</b></p>
+<hr>
+<p><b>Received by:</b> {{s['created_by']}}</p>
+<center><p class="small">Thank you! This receipt can be screenshotted and sent to parents.</p></center>
+</div>
+<div class="card no-print">
+<button class="btn" onclick="window.print()">PRINT / SCREENSHOT</button>
+<a href="/"><button class="btn" style="background:gray; margin-top:10px">BACK</button></a>
+</div>
+"""
+
+# --- ROUTES ---
+@app.before_request
+def before(): g._database = None
+@app.teardown_appcontext
+def close(exception): 
+    db = getattr(g, '_database', None)
+    if db: db.close()
+
+@app.route("/", methods=["GET","POST"])
 def login():
-    if request.method == 'POST':
-        uid = request.form['id']
-        pwd = request.form['password']
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE id=? AND password=?", (uid, pwd))
-        user = cur.fetchone()
-        if user:
-            session['user'] = user
-            return redirect('/dashboard')
-        else:
-            content = "<h3 style='color:red'>Invalid ID or Password</h3><a href='/'><button>Try Again</button></a>"
-            return render_template_string(HTML.replace("{{content}}", content))
-    
-    content = """
-    <h2 style="color:#0033a0; text-align:center;">Login</h2>
-    <form method="post">
-    <input name="id" placeholder="Enter ID e.g STU001" required>
-    <input name="password" type="password" placeholder="Password" required>
-    <button type="submit">LOGIN</button>
-    </form>
-    <div class="info">
-    <b>Demo Accounts:</b><br>
-    Student: STU001 / 1234<br>
-    Admin: ADMIN001 / admin123<br>
-    Lecturer: LEC001 / 1234
-    </div>
-    """
-    return render_template_string(HTML.replace("{{content}}", content))
+    if request.method=="POST":
+        db=get_db()
+        u=db.execute("SELECT * FROM users WHERE username=? AND password=?",
+                     (request.form['username'], request.form['password'])).fetchone()
+        if u:
+            session['user']=u['username']; session['role']=u['role']; return redirect("/dashboard")
+        return render_template_string(BASE_HTML, content="<div class='card'><p style='color:red'>Wrong login</p>"+LOGIN_PAGE+"</div>")
+    if 'user' in session: return redirect("/dashboard")
+    return render_template_string(BASE_HTML, content=LOGIN_PAGE)
 
-@app.route('/dashboard')
+@app.route("/dashboard")
 def dashboard():
-    if 'user' not in session:
-        return redirect('/')
-    user = session['user']
-    content = f"""
-    <h2 style="color:#0033a0;">Welcome, {user[1]} <span class="badge">{user[2]}</span></h2>
-    <p><b>ID:</b> {user[0]}<br><b>Dept:</b> {user[4]}</p>
-    <hr>
-    <p style="color:green; font-weight:bold;">✅ You are now in BLUE C&S Portal!</p>
-    <p>Date: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
-    <a href="/"><button>Logout</button></a>
-    """
-    return render_template_string(HTML.replace("{{content}}", content))
+    if 'user' not in session: return redirect("/")
+    db=get_db()
+    students=db.execute("SELECT * FROM students ORDER BY id DESC").fetchall()
+    content=render_template_string(DASHBOARD, user=session['user'], role=session['role'], students=students)
+    return render_template_string(BASE_HTML, content=content)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+@app.route("/add", methods=["POST"])
+def add():
+    if 'user' not in session: return redirect("/")
+    db=get_db()
+    db.execute("INSERT INTO students (name,class_name,notebook_list,textbook_list,books_total,books_paid,fees_total,fees_paid,created_by,date) VALUES (?,?,?,?,?,?,?,?,?,?)",
+               (request.form['name'], request.form['class_name'], request.form['notebook_list'], request.form['textbook_list'],
+                float(request.form['books_total']), float(request.form['books_paid']),
+                float(request.form['fees_total']), float(request.form['fees_paid']),
+                session['user'], datetime.now().strftime("%d-%m-%Y %H:%M")))
+    db.commit()
+    return redirect("/dashboard")
+
+@app.route("/receipt/<int:id>")
+def receipt(id):
+    if 'user' not in session: return redirect("/")
+    db=get_db()
+    s=db.execute("SELECT * FROM students WHERE id=?", (id,)).fetchone()
+    content=render_template_string(RECEIPT, s=s, date=datetime.now().strftime("%d-%m-%Y"))
+    return render_template_string(BASE_HTML, content=content)
+
+@app.route("/logout")
+def logout():
+    session.clear(); return redirect("/")
+
+if __name__=="__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
